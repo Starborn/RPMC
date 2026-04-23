@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OAMAP Review Process Model Card</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0f1a; color: #e2e8f0; font-family: 'IBM Plex Sans', sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+const SCHEMA = {
+  submission: {
+    title: "Submission Metadata",
+    fields: [
+      { id: "sub_id", label: "Submission ID", type: "text", required: true, help: "Unique identifier assigned at receipt" },
+      { id: "sub_date", label: "Date Received", type: "date", required: true, help: "ISO 8601 timestamp of submission receipt" },
+      { id: "venue_name", label: "Venue Name", type: "text", required: true, help: "Journal, conference, or funding body" },
+      { id: "venue_type", label: "Venue Type", type: "select", required: true, options: ["journal","conference","funding-body","promotion-committee"], help: "Type of assessment venue" },
+      { id: "track", label: "Track / Category", type: "text", required: false, help: "Submission track or category if applicable" },
+    ]
+  },
+  demographics: {
+    title: "Author Demographics (Aggregated)",
+    fields: [
+      { id: "author_count", label: "Number of Authors", type: "number", required: true, help: "Total number of authors on submission" },
+      { id: "author_regions", label: "Author Region(s)", type: "multiselect", required: true, options: ["Africa","Asia-Pacific","Europe","Latin America","Middle East","North America","Oceania"], help: "Geographic regions represented" },
+      { id: "career_stages", label: "Career Stage(s)", type: "multiselect", required: true, options: ["student","early-career","mid-career","senior","independent-scholar","industry"], help: "Career stages represented" },
+      { id: "institution_types", label: "Institution Type(s)", type: "multiselect", required: true, options: ["R1-university","teaching-institution","independent-institute","industry-lab","government-agency","unaffiliated"], help: "Types of institutions represented" },
+      { id: "language_background", label: "Primary Language Background", type: "select", required: false, options: ["native-English","non-native-English","mixed","undisclosed"], help: "Relevant for LLM detector bias analysis" },
+    ]
+  },
+  ai_tools: {
+    title: "AI Tools Invoked",
+    fields: [
+      { id: "tools_used", label: "AI Tools Used", type: "tool_list", required: true, help: "List all AI tools applied to this submission" },
+    ]
+  },
+  review_process: {
+    title: "Review Process (Pseudonymised)",
+    fields: [
+      { id: "num_reviewers", label: "Number of Reviewers Assigned", type: "number", required: true, help: "Total reviewers assigned (identity protected)" },
+      { id: "assignment_date", label: "Reviewer Assignment Date", type: "date", required: true, help: "Date reviewers were assigned" },
+      { id: "coi_check", label: "COI Check Performed", type: "select", required: true, options: ["yes-automated","yes-manual","yes-both","no","undisclosed"], help: "Whether COI checks were performed" },
+      { id: "review_criteria_published", label: "Review Criteria Published in Advance", type: "select", required: true, options: ["yes","partially","no"], help: "Whether criteria were published before submission" },
+      { id: "reviews_complete", label: "All Reviews Completed", type: "select", required: true, options: ["yes","partial","no"], help: "Whether all reviewers submitted" },
+      { id: "review_completion_date", label: "Last Review Completion Date", type: "date", required: false, help: "Date the final review was submitted" },
+      { id: "human_review_of_ai", label: "Human Review of AI Outputs", type: "select", required: true, options: ["yes-mandatory","yes-optional","no","not-applicable"], help: "Whether human review was required before acting on AI outputs" },
+    ]
+  },
+  review_quality: {
+    title: "Review Quality Indicators (Per Review, Pseudonymised)",
+    fields: [
+      { id: "review_quality_entries", label: "Review Quality Entries", type: "review_quality_list", required: false, help: "Quality indicators per review, pseudonym only" },
+    ]
+  },
+  decision: {
+    title: "Decision Record",
+    fields: [
+      { id: "decision_date", label: "Decision Date", type: "date", required: true, help: "Date decision was communicated" },
+      { id: "decision_outcome", label: "Decision Outcome", type: "select", required: true, options: ["accept","minor-revision","major-revision","reject","desk-reject","withdrawn"], help: "Final decision" },
+      { id: "decision_consistent", label: "Consistent with Aggregate Scores", type: "select", required: true, options: ["yes","no-override-justified","no-override-unjustified","not-applicable"], help: "Whether decision aligned with reviewers" },
+      { id: "override_reason", label: "Override Reason", type: "select", required: false, options: ["editorial-judgment","scope-mismatch","integrity-concern","capacity-constraint","other"], help: "Coded reason if decision overrode consensus" },
+      { id: "appeal_available", label: "Appeal Process Available", type: "select", required: true, options: ["yes-structured","yes-informal","no"], help: "Whether appeal pathway exists" },
+      { id: "appeal_status", label: "Appeal Status", type: "select", required: false, options: ["not-filed","filed-pending","filed-upheld","filed-overturned","not-applicable"], help: "Current appeal status" },
+    ]
+  }
+};
+
+const C = {
+  bg:"#0a0f1a", sf:"#111827", sl:"#1e293b", bd:"#2d3a4f", bl:"#3b4d66",
+  ac:"#38bdf8", ad:"#1e6fa0", tx:"#e2e8f0", td:"#94a3b8", tm:"#64748b",
+  ok:"#4ade80", er:"#f87171", wh:"#ffffff"
+};
+const mono = "'IBM Plex Mono',monospace";
+const sans = "'IBM Plex Sans',sans-serif";
+const is_ = (s,v) => ({ padding:"8px 12px", fontSize:13, fontFamily:sans, background:C.bg, border:`1px solid ${C.bd}`, borderRadius:4, color:C.tx, outline:"none", width:"100%", ...v });
+
+function App() {
+  const [tab, setTab] = useState("schema");
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,color:C.tx,fontFamily:sans}}>
+      <header style={{background:C.sf,borderBottom:`1px solid ${C.bd}`,padding:"24px 0"}}>
+        <div style={{maxWidth:1100,margin:"0 auto",padding:"0 24px"}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:12,marginBottom:8}}>
+            <span style={{fontFamily:mono,fontSize:13,color:C.ac,letterSpacing:3,textTransform:"uppercase"}}>OAMAP</span>
+            <span style={{fontSize:13,color:C.tm}}>Review Process Model Card</span>
+          </div>
+          <h1 style={{fontSize:28,fontWeight:700,margin:0,letterSpacing:-0.5}}>Review Process Model Card</h1>
+          <p style={{fontSize:14,color:C.td,margin:"8px 0 0",maxWidth:700}}>Structured documentation for academic review processes. Transparency without exposure. Auditability without opacity.</p>
+        </div>
+      </header>
+      <nav style={{background:C.sf,borderBottom:`1px solid ${C.bd}`}}>
+        <div style={{maxWidth:1100,margin:"0 auto",padding:"0 24px",display:"flex"}}>
+          {[{id:"schema",l:"1. Schema"},{id:"generator",l:"2. Generator"},{id:"tutorial",l:"3. Tutorial"}].map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"14px 24px",fontSize:14,fontWeight:500,fontFamily:sans,background:"transparent",border:"none",cursor:"pointer",color:tab===t.id?C.ac:C.tm,borderBottom:tab===t.id?`2px solid ${C.ac}`:"2px solid transparent"}}>{t.l}</button>
+          ))}
+        </div>
+      </nav>
+      <main style={{maxWidth:1100,margin:"0 auto",padding:"32px 24px"}}>
+        {tab==="schema"&&<SchemaTab/>}
+        {tab==="generator"&&<GeneratorTab/>}
+        {tab==="tutorial"&&<TutorialTab/>}
+      </main>
+      <footer style={{borderTop:`1px solid ${C.bd}`,padding:"24px",textAlign:"center"}}>
+        <p style={{fontSize:12,color:C.tm}}>W3C AI Knowledge Representation Community Group | Epistemic Systems Lab, Ronin Institute | 2026</p>
+        <p style={{fontSize:11,color:C.tm,marginTop:4}}>Part of the OAMAP framework for auditable research assessment</p>
+      </footer>
+    </div>
+  );
+}
+
+function SH({title,subtitle}){return(<div style={{marginBottom:24}}><h2 style={{fontSize:22,fontWeight:700,margin:"0 0 8px",letterSpacing:-0.3}}>{title}</h2>{subtitle&&<p style={{fontSize:14,color:C.td,margin:0,maxWidth:700,lineHeight:1.5}}>{subtitle}</p>}</div>);}
+
+function SchemaTab(){
+  return(<div>
+    <SH title="Review Process Model Card Schema" subtitle="A structured documentation framework for making academic review processes transparent and auditable while preserving reviewer anonymity."/>
+    <div style={{background:C.sf,border:`1px solid ${C.bd}`,borderRadius:8,padding:24,marginBottom:24}}>
+      <h3 style={{fontSize:16,fontWeight:600,margin:"0 0 12px",color:C.ac}}>Design Principles</h3>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {[{t:"Anonymity Preserved",d:"Reviewer identities are never exposed. All review-level data uses pseudonymous identifiers."},{t:"Opacity Eliminated",d:"Every procedural step is timestamped and recorded. Process irregularities become detectable."},{t:"Demographic Fairness",d:"Aggregated author demographics enable bias detection across groups without identifying individuals."},{t:"AI Tool Traceability",d:"All AI tools invoked are logged with version, output, and confidence -- linking to DF-MC documentation."}].map((p,i)=>(
+          <div key={i} style={{background:C.sl,padding:16,borderRadius:6,border:`1px solid ${C.bd}`}}>
+            <h4 style={{fontSize:14,fontWeight:600,margin:"0 0 6px",color:C.tx}}>{p.t}</h4>
+            <p style={{fontSize:13,color:C.td,margin:0,lineHeight:1.5}}>{p.d}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+    {Object.entries(SCHEMA).map(([k,s])=>(
+      <div key={k} style={{background:C.sf,border:`1px solid ${C.bd}`,borderRadius:8,padding:24,marginBottom:16}}>
+        <h3 style={{fontSize:16,fontWeight:600,margin:"0 0 16px",color:C.ac,fontFamily:mono}}>{s.title}</h3>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead><tr style={{borderBottom:`1px solid ${C.bl}`}}>
+            <th style={{textAlign:"left",padding:"8px 12px",color:C.tm,fontWeight:500}}>Field</th>
+            <th style={{textAlign:"left",padding:"8px 12px",color:C.tm,fontWeight:500}}>Type</th>
+            <th style={{textAlign:"center",padding:"8px 12px",color:C.tm,fontWeight:500}}>Required</th>
+            <th style={{textAlign:"left",padding:"8px 12px",color:C.tm,fontWeight:500}}>Description</th>
+          </tr></thead>
+          <tbody>{s.fields.map(f=>(
+            <tr key={f.id} style={{borderBottom:`1px solid ${C.bd}`}}>
+              <td style={{padding:"10px 12px",fontFamily:mono,color:C.tx,fontSize:12}}>{f.id}</td>
+              <td style={{padding:"10px 12px",color:C.td}}>{f.type==="select"||f.type==="multiselect"?`${f.type} [${(f.options||[]).length}]`:f.type}</td>
+              <td style={{padding:"10px 12px",textAlign:"center"}}><span style={{color:f.required?C.ok:C.tm,fontSize:12}}>{f.required?"Required":"Optional"}</span></td>
+              <td style={{padding:"10px 12px",color:C.td,maxWidth:400}}>{f.help}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {s.fields.some(f=>f.options)&&<div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.bd}`}}>
+          {s.fields.filter(f=>f.options).map(f=><div key={f.id} style={{marginBottom:8}}><span style={{fontSize:12,color:C.tm,fontFamily:mono}}>{f.id}: </span><span style={{fontSize:12,color:C.td}}>{f.options.join(" | ")}</span></div>)}
+        </div>}
+      </div>
+    ))}
+    <div style={{background:C.sf,border:`1px solid ${C.bd}`,borderRadius:8,padding:24}}>
+      <h3 style={{fontSize:16,fontWeight:600,margin:"0 0 12px",color:C.ac}}>JSON Output Structure</h3>
+      <pre style={{background:C.bg,border:`1px solid ${C.bd}`,borderRadius:6,padding:16,fontSize:12,fontFamily:mono,color:C.td,overflowX:"auto",lineHeight:1.6}}>{`{
+  "schema_version": "1.0",
+  "generated_date": "2026-04-21T00:00:00Z",
+  "submission": { "sub_id": "", "sub_date": "", ... },
+  "demographics": { "author_count": 0, "author_regions": [], ... },
+  "ai_tools": [
+    { "tool_name": "", "tool_version": "", "dfmc_url": "",
+      "output_classification": "", "confidence_score": 0.0,
+      "human_reviewed": true }
+  ],
+  "review_process": { "num_reviewers": 0, "coi_check": "", ... },
+  "reviews": [
+    { "pseudonym": "Reviewer-A", "criteria_addressed": 0,
+      "criteria_total": 0, "word_count": 0,
+      "actionable_feedback": true, "methodology_engaged": true }
+  ],
+  "decision": { "decision_date": "", "decision_outcome": "", ... }
+}`}</pre>
+    </div>
+  </div>);
+}
+
+function GeneratorTab(){
+  const [fd, setFd] = useState({});
+  const [tools, setTools] = useState([{tool_name:"",tool_version:"",dfmc_url:"",output:"",confidence:"",human_reviewed:"yes"}]);
+  const [revs, setRevs] = useState([{pseudonym:"Reviewer-A",ca:"",ct:"",wc:"",act:"yes",meth:"yes"}]);
+  const [out, setOut] = useState(null);
+
+  const uf = (id,v)=>setFd(p=>({...p,[id]:v}));
+  const um = (id,v)=>setFd(p=>{const c=p[id]||[];return{...p,[id]:c.includes(v)?c.filter(x=>x!==v):[...c,v]};});
+
+  const gen = ()=>{
+    const card={schema_version:"1.0",generated_date:new Date().toISOString(),submission:{},demographics:{},ai_tools:tools,review_process:{},reviews:revs.map(r=>({pseudonym:r.pseudonym,criteria_addressed:parseInt(r.ca)||0,criteria_total:parseInt(r.ct)||0,word_count:parseInt(r.wc)||0,actionable_feedback:r.act==="yes",methodology_engaged:r.meth==="yes"})),decision:{}};
+    Object.entries(SCHEMA).forEach(([s,d])=>{if(s==="ai_tools"||s==="review_quality")return;d.fields.forEach(f=>{if(card[s])card[s][f.id]=fd[f.id]||"";});});
+    setOut(card);
+  };
+
+  const rf = (f)=>{
+    const bs = is_();
+    if(f.type==="select") return <select value={fd[f.id]||""} onChange={e=>uf(f.id,e.target.value)} style={bs}><option value="">-- Select --</option>{f.options.map(o=><option key={o} value={o}>{o}</option>)}</select>;
+    if(f.type==="multiselect") return <div style={{display:"flex",flexWrap:"wrap",gap:6}}>{f.options.map(o=>{const s=(fd[f.id]||[]).includes(o);return<button key={o} onClick={()=>um(f.id,o)} style={{padding:"4px 10px",fontSize:12,borderRadius:4,cursor:"pointer",fontFamily:sans,background:s?C.ad:"transparent",border:`1px solid ${s?C.ac:C.bd}`,color:s?C.wh:C.td}}>{o}</button>;})}</div>;
+    if(f.type==="tool_list"||f.type==="review_quality_list") return null;
+    return <input type={f.type==="number"?"number":f.type==="date"?"date":"text"} value={fd[f.id]||""} onChange={e=>uf(f.id,e.target.value)} style={bs}/>;
+  };
+
+  const tis = {padding:"6px 10px",fontSize:12,background:C.bg,border:`1px solid ${C.bd}`,borderRadius:4,color:C.tx,fontFamily:sans};
+
+  return(<div>
+    <SH title="Review Process Model Card Generator" subtitle="Fill in the fields below to generate a structured model card. All reviewer identities are pseudonymised."/>
+    {Object.entries(SCHEMA).map(([k,s])=>(
+      <div key={k} style={{background:C.sf,border:`1px solid ${C.bd}`,borderRadius:8,padding:24,marginBottom:16}}>
+        <h3 style={{fontSize:15,fontWeight:600,margin:"0 0 16px",color:C.ac}}>{s.title}</h3>
+        {s.fields.filter(f=>f.type!=="tool_list"&&f.type!=="review_quality_list").map(f=>(
+          <div key={f.id} style={{marginBottom:14}}>
+            <label style={{display:"block",fontSize:13,fontWeight:500,marginBottom:4,color:C.tx}}>{f.label} {f.required&&<span style={{color:C.er,fontSize:11}}>*</span>}</label>
+            <div style={{fontSize:11,color:C.tm,marginBottom:4}}>{f.help}</div>
+            {rf(f)}
+          </div>
+        ))}
+        {k==="ai_tools"&&<div>
+          {tools.map((tl,i)=>(
+            <div key={i} style={{background:C.sl,border:`1px solid ${C.bd}`,borderRadius:6,padding:16,marginBottom:8}}>
+              <div style={{fontSize:12,color:C.ac,fontFamily:mono,marginBottom:8}}>AI Tool {i+1}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <input placeholder="Tool name" value={tl.tool_name} onChange={e=>{const n=[...tools];n[i].tool_name=e.target.value;setTools(n);}} style={tis}/>
+                <input placeholder="Version" value={tl.tool_version} onChange={e=>{const n=[...tools];n[i].tool_version=e.target.value;setTools(n);}} style={tis}/>
+                <input placeholder="DF-MC URL" value={tl.dfmc_url} onChange={e=>{const n=[...tools];n[i].dfmc_url=e.target.value;setTools(n);}} style={{...tis,gridColumn:"1/3"}}/>
+                <input placeholder="Output" value={tl.output} onChange={e=>{const n=[...tools];n[i].output=e.target.value;setTools(n);}} style={tis}/>
+                <input placeholder="Confidence (0-1)" value={tl.confidence} onChange={e=>{const n=[...tools];n[i].confidence=e.target.value;setTools(n);}} style={tis}/>
+              </div>
+            </div>
+          ))}
+          <button onClick={()=>setTools([...tools,{tool_name:"",tool_version:"",dfmc_url:"",output:"",confidence:"",human_reviewed:"yes"}])} style={{padding:"6px 14px",fontSize:12,background:"transparent",border:`1px solid ${C.bd}`,borderRadius:4,color:C.ac,cursor:"pointer",fontFamily:sans}}>+ Add AI Tool</button>
+        </div>}
+        {k==="review_quality"&&<div>
+          {revs.map((r,i)=>(
+            <div key={i} style={{background:C.sl,border:`1px solid ${C.bd}`,borderRadius:6,padding:16,marginBottom:8}}>
+              <div style={{fontSize:12,color:C.ac,fontFamily:mono,marginBottom:8}}>{r.pseudonym}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                <input placeholder="Criteria addressed" value={r.ca} onChange={e=>{const n=[...revs];n[i].ca=e.target.value;setRevs(n);}} style={tis}/>
+                <input placeholder="Criteria total" value={r.ct} onChange={e=>{const n=[...revs];n[i].ct=e.target.value;setRevs(n);}} style={tis}/>
+                <input placeholder="Word count" value={r.wc} onChange={e=>{const n=[...revs];n[i].wc=e.target.value;setRevs(n);}} style={tis}/>
+              </div>
+            </div>
+          ))}
+          <button onClick={()=>{const l=String.fromCharCode(65+revs.length);setRevs([...revs,{pseudonym:`Reviewer-${l}`,ca:"",ct:"",wc:"",act:"yes",meth:"yes"}]);}} style={{padding:"6px 14px",fontSize:12,background:"transparent",border:`1px solid ${C.bd}`,borderRadius:4,color:C.ac,cursor:"pointer",fontFamily:sans}}>+ Add Reviewer</button>
+        </div>}
+      </div>
+    ))}
+    <button onClick={gen} style={{padding:"12px 32px",fontSize:14,fontWeight:600,background:C.ac,color:C.bg,border:"none",borderRadius:6,cursor:"pointer",fontFamily:sans}}>Generate Review Process Model Card</button>
+    {out&&<div style={{marginTop:24,background:C.sf,border:`1px solid ${C.ac}`,borderRadius:8,padding:24}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <h3 style={{fontSize:16,fontWeight:600,margin:0,color:C.ac}}>Generated Model Card</h3>
+        <button onClick={()=>{navigator.clipboard.writeText(JSON.stringify(out,null,2));}} style={{padding:"6px 14px",fontSize:12,background:C.sl,border:`1px solid ${C.bd}`,borderRadius:4,color:C.ac,cursor:"pointer",fontFamily:sans}}>Copy JSON</button>
+      </div>
+      <pre style={{background:C.bg,border:`1px solid ${C.bd}`,borderRadius:6,padding:16,fontSize:11,fontFamily:mono,color:C.td,overflowX:"auto",lineHeight:1.5,maxHeight:500,overflow:"auto"}}>{JSON.stringify(out,null,2)}</pre>
+    </div>}
+  </div>);
+}
+
+function TutorialTab(){
+  const [step, setStep] = useState(0);
+  const steps=[
+    {t:"What is a Review Process Model Card?",c:"A Review Process Model Card is structured documentation for an academic review process -- like a nutrition label for peer review. Just as AI model cards (Mitchell et al., 2019) document what a machine learning model can and cannot do, a Review Process Model Card documents what happened during a review: when was the submission received, how many reviewers were assigned, what AI tools were used, whether review criteria were followed, and what decision was reached.\n\nThe key innovation is the separation of anonymity from opacity. Reviewer identities are never revealed -- they appear only as pseudonyms (Reviewer-A, Reviewer-B). But the process itself becomes transparent: dates, criteria coverage, AI tool invocations, and decision provenance are all recorded.\n\nThis matters because AI tools (LLM detectors, plagiarism checkers, statistical screeners) are increasingly used in review pipelines without any documentation of which tools were used, how they were configured, or how their outputs influenced decisions."},
+    {t:"Understanding the Schema",c:"The schema has six sections:\n\n1. Submission Metadata -- basic identification: when received, by which venue, in which track.\n\n2. Author Demographics (Aggregated) -- not individual data, but aggregate characteristics: how many authors, from which regions, at what career stages. This enables fairness analysis: are submissions from certain regions being rejected at higher rates?\n\n3. AI Tools Invoked -- every AI tool that processed the submission: name, version, output, confidence score, whether a human reviewed the output. Each tool links to a DF-MC.\n\n4. Review Process -- the procedural record: how many reviewers, when assigned, COI checks, criteria published in advance, reviews completed.\n\n5. Review Quality Indicators -- per-review metrics using pseudonyms only: criteria addressed, word count, actionable feedback, methodology engagement.\n\n6. Decision Record -- outcome, consistency with reviewer scores, override reason if applicable, appeal pathway."},
+    {t:"Project Setup",c:"To build your own generator:\n\nSTEP 1: Install Node.js from nodejs.org (v18+).\n\nSTEP 2: Create a new React project:\n  npx create-react-app review-card-generator\n  cd review-card-generator\n\nSTEP 3: Open in your code editor (VS Code recommended).\n\nSTEP 4: Replace src/App.js with your generator code.\n\nSTEP 5: Run:\n  npm start\n\nThis opens http://localhost:3000.\n\nAlternatively, for a simpler approach (no build step), create a single index.html file that loads React from a CDN, as this app does. This is easier to deploy -- just push the HTML file to GitHub and connect to Vercel."},
+    {t:"Schema as Data",c:"Define your schema as a JavaScript object:\n\nconst SCHEMA = {\n  submission: {\n    title: \"Submission Metadata\",\n    fields: [\n      { id: \"sub_id\", label: \"Submission ID\",\n        type: \"text\", required: true },\n      { id: \"sub_date\", label: \"Date Received\",\n        type: \"date\", required: true },\n    ]\n  },\n};\n\nWhy? Because:\n- You iterate over it to generate forms automatically\n- Same schema validates output\n- Extend without changing rendering code\n- Export the schema itself as documentation\n\nThis is called schema-driven development."},
+    {t:"Rendering Forms from Schema",c:"With the schema as data, rendering is a loop:\n\nObject.entries(SCHEMA).map(([key, section]) => (\n  <div key={key}>\n    <h3>{section.title}</h3>\n    {section.fields.map(field => (\n      <div key={field.id}>\n        <label>{field.label}</label>\n        {renderField(field)}\n      </div>\n    ))}\n  </div>\n))\n\nrenderField checks the type and returns the right input:\n\nif (field.type === \"select\") {\n  return <select>...</select>;\n}\nif (field.type === \"multiselect\") {\n  return <div> toggle buttons </div>;\n}\nreturn <input type=\"text\" />;"},
+    {t:"State Management",c:"React tracks changing data with useState:\n\nconst [formData, setFormData] = useState({});\n\nconst updateField = (id, value) => {\n  setFormData(prev => ({ ...prev, [id]: value }));\n};\n\nFor multi-select (like author regions):\n\nconst updateMulti = (id, value) => {\n  setFormData(prev => {\n    const current = prev[id] || [];\n    const updated = current.includes(value)\n      ? current.filter(v => v !== value)\n      : [...current, value];\n    return { ...prev, [id]: updated };\n  });\n};\n\nKey concepts:\n- useState({}) creates empty state\n- Updating state re-renders the form\n- Form is always in sync with data"},
+    {t:"Generating JSON Output",c:"When clicking Generate, assemble form data:\n\nconst generate = () => {\n  const card = {\n    schema_version: \"1.0\",\n    generated_date: new Date().toISOString(),\n    submission: {},\n    demographics: {},\n    ai_tools: toolsState,\n    review_process: {},\n    reviews: reviewsState,\n    decision: {},\n  };\n  Object.entries(SCHEMA).forEach(([section, def]) => {\n    def.fields.forEach(field => {\n      if (card[section])\n        card[section][field.id] = formData[field.id];\n    });\n  });\n  setOutput(card);\n};\n\nJSON.stringify(output, null, 2) formats for display.\n\nnavigator.clipboard.writeText(...) copies to clipboard."},
+    {t:"Deployment",c:"OPTION A: Vercel (this app uses this)\n  1. Push index.html to GitHub\n  2. Go to vercel.com, import repo\n  3. Vercel serves the HTML directly\n  4. Live at your-project.vercel.app\n\nOPTION B: GitHub Pages\n  Push index.html, enable Pages in repo settings.\n\nOPTION C: Hugging Face Spaces\n  Use Gradio (Python) instead of React.\n\nNEXT STEPS:\n- Add Fairness Dashboard tab\n- Connect to DF-MC Registry\n- Export to Markdown\n- Integrate with OpenReview API\n- Add persistent storage for venue data"},
+  ];
+  return(<div>
+    <SH title="Tutorial: Build a Review Process Model Card Generator" subtitle="Step-by-step for undergraduates and non-experts. No prior React experience required."/>
+    <div style={{display:"flex",gap:8,marginBottom:24,flexWrap:"wrap"}}>
+      {steps.map((s,i)=><button key={i} onClick={()=>setStep(i)} style={{padding:"8px 16px",fontSize:12,fontFamily:sans,borderRadius:4,cursor:"pointer",background:step===i?C.ac:"transparent",color:step===i?C.bg:C.td,border:`1px solid ${step===i?C.ac:C.bd}`,fontWeight:step===i?600:400}}>Step {i+1}</button>)}
+    </div>
+    <div style={{background:C.sf,border:`1px solid ${C.bd}`,borderRadius:8,padding:32}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
+        <span style={{background:C.ac,color:C.bg,width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700}}>{step+1}</span>
+        <h3 style={{fontSize:18,fontWeight:600,margin:0}}>{steps[step].t}</h3>
+      </div>
+      <div style={{fontSize:14,color:C.td,lineHeight:1.8,whiteSpace:"pre-wrap",fontFamily:sans}}>{steps[step].c}</div>
+      <div style={{display:"flex",gap:12,marginTop:24}}>
+        {step>0&&<button onClick={()=>setStep(step-1)} style={{padding:"8px 20px",fontSize:13,background:"transparent",border:`1px solid ${C.bd}`,borderRadius:4,color:C.td,cursor:"pointer",fontFamily:sans}}>Previous</button>}
+        {step<steps.length-1&&<button onClick={()=>setStep(step+1)} style={{padding:"8px 20px",fontSize:13,background:C.ac,border:"none",borderRadius:4,color:C.bg,cursor:"pointer",fontWeight:600,fontFamily:sans}}>Next Step</button>}
+      </div>
+    </div>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
